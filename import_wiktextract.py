@@ -1,32 +1,36 @@
 import json
-import MySQLdb
-from tqdm import tqdm
-from pathlib import Path
 import sys
 import logging
 import argparse
-# Removed os import as environment variables are no longer used for credentials -
-# Note: Recommending environment variables or a config file is better practice for sharing.
+import os # Re-import os if you plan to use environment variables again, otherwise remove
+from tqdm import tqdm
+from pathlib import Path
+
+# Attempt to import MySQLdb, provide helpful error if not installed
+try:
+    import MySQLdb
+except ImportError:
+    print("ERROR: The 'mysqlclient' library is not installed. Please install it using 'pip install mysqlclient'.", file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    print(f"ERROR: An unexpected error occurred while importing 'mysqlclient': {e}", file=sys.stderr)
+    sys.exit(1)
+
 
 # --- CONFIGURATION ---
-# Default JSONL file path - Update this or use the command-line argument.
-# It's recommended to use a relative path or let the user specify the full path.
-# Example: Assuming the file is in a 'data' subdirectory relative to the script.
-DEFAULT_JSONL_FILE_PATH = Path('./data/raw-wiktextract-data.jsonl') # Replaced hardcoded C:\ path
+# Default JSONL file path - can be overridden by command-line argument.
+# IMPORTANT: Ensure this path is correct for your system.
+DEFAULT_JSONL_FILE_PATH = Path(r'C:\T-I-M-O-C\fadeu\data\raw-wiktextract-data.jsonl')
 
 TRANSLATION_BATCH_SIZE = 1000
-TARGET_LANG_CODES = {"en", "de", "fa"} # Languages we want to process and link
 
-# --- DATABASE CONFIGURATION ---
-# WARNING: Hardcoding credentials here is NOT secure for production environments.
-# For GitHub, replace these with placeholder values or, preferably,
-# use environment variables or a separate configuration file not committed to Git.
+# --- DATABASE CONFIGURATION (HARDCODED FOR LOCAL USE - NOT FOR GITHUB/PRODUCTION) ---
+# WARNING: Hardcoding credentials is NOT secure for production environments.
+# This is reverted for your convenience based on previous conversation state.
 DB_HOST = "localhost"
-# REPLACE WITH YOUR DATABASE USERNAME OR USE ENVIRONMENT VARIABLES/CONFIG
-DB_USER = "YOUR_DB_USER"
-# REPLACE WITH YOUR DATABASE PASSWORD OR USE ENVIRONMENT VARIABLES/CONFIG
-# CONSIDER USING os.environ.get('DB_PASSWORD') IF USING ENVIRONMENT VARIABLES
-DB_PASSWORD = "YOUR_DB_PASSWORD" # Replaced hardcoded password
+DB_USER = "sakar"
+DB_PASSWORD = "A.a123456" # Your specific hardcoded password
+DB_NAME = "dictdb" # Added DB name here for clarity
 
 # --- LOGGING SETUP ---
 # Map logging level names to logging module constants
@@ -39,10 +43,6 @@ LOGGING_LEVELS = {
 }
 
 def main():
-    """
-    Main function to parse arguments, connect to the database, process the
-    Wiktextract JSONL file, and import translations.
-    """
     # --- ARGUMENT PARSING ---
     parser = argparse.ArgumentParser(description="Import Wiktextract JSONL data into a MySQL dictionary database (DE/FA via EN bridge).")
     parser.add_argument(
@@ -65,45 +65,23 @@ def main():
     )
     parser.add_argument(
         '--db-name',
-        default='dictdb',
+        default=DB_NAME, # Use the DB_NAME constant
         type=str,
-        help='Name of the MySQL database (default: dictdb)'
+        help=f'Name of the MySQL database (default: {DB_NAME})'
     )
-    # Optional arguments for database credentials (alternative to hardcoding/env vars)
-    parser.add_argument(
-        '--db-user',
-        type=str,
-        help='Database username (overrides script default)'
-    )
-    parser.add_argument(
-        '--db-password',
-        type=str,
-        help='Database password (overrides script default)'
-    )
-    parser.add_argument(
-        '--db-host',
-        type=str,
-        help='Database host (overrides script default)'
-    )
-
 
     args = parser.parse_args()
 
-    # Use command-line args for DB credentials if provided, otherwise use script defaults (placeholders)
-    db_user = args.db_user if args.db_user else DB_USER
-    db_password = args.db_password if args.db_password else DB_PASSWORD
-    db_host = args.db_host if args.db_host else DB_HOST
-
-
     # --- INITIALIZATION ---
     # Configure logging based on the command-line argument
+    # Log file name is now more generic
     logging.basicConfig(filename='dictionary_import.log', level=LOGGING_LEVELS[args.log_level],
                         format='%(asctime)s - %(levelname)s - %(message)s')
 
     # Open error log file - ensure it's closed in finally
     error_log = None
     try:
-        error_log = open('import_error_summary.txt', 'w', encoding='utf-8')
+        error_log = open('import_error_summary.txt', 'w', encoding='utf-8') # More specific error summary file
     except IOError as e:
         logging.error(f"Failed to open error log file 'import_error_summary.txt': {e}")
         print(f"ERROR: Failed to open error log file 'import_error_summary.txt': {e}", file=sys.stderr)
@@ -113,24 +91,16 @@ def main():
     conn = None
     cursor = None
     if not args.dry_run:
-        # Check if placeholder credentials are still present
-        if db_user == "YOUR_DB_USER" or db_password == "YOUR_DB_PASSWORD":
-            print("ERROR: Database username or password placeholders are still present.")
-            print("Please update them in the script, use command-line arguments (--db-user, --db-password), or use environment variables.", file=sys.stderr)
-            if error_log:
-                error_log.close()
-            sys.exit(1)
-
-        print(f"Attempting to connect to database '{args.db_name}' as user '{db_user}'...")
+        print(f"Attempting to connect to database '{args.db_name}' as user '{DB_USER}'...")
         try:
             conn = MySQLdb.connect(
-                host=db_host,
-                user=db_user,
-                passwd=db_password,
+                host=DB_HOST,
+                user=DB_USER,
+                passwd=DB_PASSWORD, # Use hardcoded password
                 db=args.db_name,
                 charset='utf8mb4',
-                use_unicode=True,
-                autocommit=False
+                use_unicode=True, # Ensure data is treated as Unicode
+                autocommit=False  # Explicit transaction control
             )
             cursor = conn.cursor()
             print(f"Successfully connected to database '{args.db_name}'.")
@@ -138,13 +108,15 @@ def main():
             logging.error(f"DB Connection Failed: {e.args[0]}: {e.args[1]}")
             print(f"ERROR: DB Connection Failed: {e.args[0]}: {e.args[1]}", file=sys.stderr)
             print("Please check database connection details, ensure MySQL server is running,", file=sys.stderr)
-            print(f"and that the user '{db_user}' has correct password and permissions on '{args.db_name}'.", file=sys.stderr)
+            print(f"and that the user '{DB_USER}' has correct password and permissions on '{args.db_name}'.", file=sys.stderr)
+            # Ensure error_log is closed before exiting
             if error_log:
                  error_log.close()
             sys.exit(1)
         except Exception as e:
             logging.error(f"An unexpected error occurred during database connection: {e}")
             print(f"ERROR: An unexpected error occurred during database connection: {e}", file=sys.stderr)
+            # Ensure error_log is closed before exiting
             if error_log:
                  error_log.close()
             sys.exit(1)
@@ -153,18 +125,28 @@ def main():
     # --- PROCESSING SETUP ---
     word_cache = {}
     translation_batch = []
-    stats = {'processed_lines': 0, 'errors': 0, 'english_entries': 0, 'valid_de_fa_pairs_in_en_entry': 0, 'translation_pairs_batched': 0}
+    # Updated stats names for clarity
+    stats = {
+        'processed_lines': 0,
+        'errors': 0,
+        'english_entries': 0,
+        'english_entries_with_de_trans': 0, # New stat
+        'english_entries_with_fa_trans': 0, # New stat
+        'english_entries_with_both_de_fa_trans': 0, # Renamed stat
+        'translation_pairs_batched': 0 # Pairs added to the batch list
+    }
 
     try:
         # --- FILE PROCESSING LOOP ---
         print(f"Processing file: {args.jsonl_file}")
         # Check if the file exists before opening
         if not args.jsonl_file.is_file():
-            logging.error(f"Input file not found at {args.jsonl_file}")
-            print(f"ERROR: Input file not found at {args.jsonl_file}", file=sys.stderr)
-            stats['errors'] += 1
-            # Jump to finally block for cleanup
-            raise FileNotFoundError # Re-raise to trigger the main FileNotFoundError except block
+             logging.error(f"Input file not found at {args.jsonl_file}")
+             print(f"ERROR: Input file not found at {args.jsonl_file}", file=sys.stderr)
+             stats['errors'] += 1 # Count file not found as an error
+             # No need to proceed if file not found
+             # Jump to finally block for cleanup
+             raise FileNotFoundError # Re-raise to trigger the main FileNotFoundError except block
 
 
         with open(args.jsonl_file, 'r', encoding='utf-8') as f:
@@ -187,8 +169,9 @@ def main():
                     stats['english_entries'] += 1
 
                     # Get English word ID
+                    # Pass cursor explicitly as per your function definition
                     en_id = get_word_id(word_cache, english_word, "en", args.dry_run, cursor)
-                    if en_id is None:
+                    if en_id is None: # Use 'is None' to be explicit
                         logging.error(f"Failed to get/create word ID for English word '{english_word[:50]}...' on line {stats['processed_lines']}")
                         stats['errors'] += 1
                         error_log.write(f"L{stats['processed_lines']}_ERROR_GET_EN_ID: Failed to get/create ID for '{english_word}'.\nLine: {line[:200]}\n")
@@ -196,71 +179,81 @@ def main():
 
                     # Extract translations for German and Persian from the English entry
                     translations = data.get("translations", [])
-                    german_translations = [t for t in translations if t.get("code") == "de"]
-                    persian_translations = [t for t in translations if t.get("code") == "fa"]
+                    german_translations = [t for t in translations if t.get("code") == "de"] # Use "code" as per Wiktextract format
+                    persian_translations = [t for t in translations if t.get("code") == "fa"] # Use "code" as per Wiktextract format
 
-                    # We are looking for English entries that have *both* German and Persian translations listed
-                    if not german_translations or not persian_translations:
-                        continue
+                    # --- FIX APPLIED HERE ---
+                    # REMOVED: if not german_translations or not persian_translations: continue
+                    # We now process DE and FA translations independently if they exist in the English entry.
 
-                    stats['valid_de_fa_pairs_in_en_entry'] += 1
-
-                    # Process German translations found in this English entry
-                    for trans_entry in german_translations:
-                         target_word_candidate = trans_entry.get("word")
-                         target_words_text_list_processed = []
-                         if isinstance(target_word_candidate, str):
-                             stripped_word = target_word_candidate.strip()
-                             if stripped_word:
-                                 target_words_text_list_processed = [stripped_word]
-                         elif isinstance(target_word_candidate, list):
-                             for item in target_word_candidate:
-                                 if isinstance(item, str):
-                                     stripped_item = item.strip()
-                                     if stripped_item:
-                                         target_words_text_list_processed.append(stripped_item)
-                         elif target_word_candidate is not None:
-                             logging.warning(f"Unexpected 'word' data format for German translation in line {stats['processed_lines']} for source word '{english_word[:50]}...'. Data: '{target_word_candidate}'. Skipping translation entry.")
-                             error_log.write(f"L{stats['processed_lines']}_WARN_DE_TRANS_FORMAT: Unexpected target 'word' format for German translation of '{english_word}'. Data: '{target_word_candidate}'.\n")
-
-
-                         # Add DE -> EN translation pairs
-                         if target_words_text_list_processed:
-                             for de_word in target_words_text_list_processed:
-                                 de_id = get_word_id(word_cache, de_word, "de", args.dry_run, cursor)
-                                 if de_id is not None:
-                                     translation_batch.append((de_id, en_id))
+                    if german_translations:
+                         stats['english_entries_with_de_trans'] += 1
+                         # Process German translations found in this English entry
+                         for trans_entry in german_translations:
+                             target_word_candidate = trans_entry.get("word") # Use "word" for the translation text/list
+                             # Ensure target_words_text_list is a list of non-empty, stripped strings
+                             target_words_text_list_processed = []
+                             if isinstance(target_word_candidate, str):
+                                 stripped_word = target_word_candidate.strip()
+                                 if stripped_word:
+                                     target_words_text_list_processed = [stripped_word]
+                             elif isinstance(target_word_candidate, list):
+                                 for item in target_word_candidate:
+                                     if isinstance(item, str):
+                                         stripped_item = item.strip()
+                                         if stripped_item:
+                                             target_words_text_list_processed.append(stripped_item)
+                             elif target_word_candidate is not None: # Log if it was not None, but also not a processable type
+                                  logging.warning(f"Unexpected 'word' data format for German translation in line {stats['processed_lines']} for source word '{english_word[:50]}...'. Data: '{target_word_candidate}'. Skipping translation entry.")
+                                  error_log.write(f"L{stats['processed_lines']}_WARN_DE_TRANS_FORMAT: Unexpected target 'word' format for German translation of '{english_word}'. Data: '{target_word_candidate}'.\n")
 
 
-                    # Process Persian translations found in this English entry
-                    for trans_entry in persian_translations:
-                         target_word_candidate = trans_entry.get("word")
-                         target_words_text_list_processed = []
-                         if isinstance(target_word_candidate, str):
-                             stripped_word = target_word_candidate.strip()
-                             if stripped_word:
-                                 target_words_text_list_processed = [stripped_word]
-                         elif isinstance(target_word_candidate, list):
-                             for item in target_word_candidate:
-                                 if isinstance(item, str):
-                                     stripped_item = item.strip()
-                                     if stripped_item:
-                                         target_words_text_list_processed.append(stripped_item)
-                         elif target_word_candidate is not None:
-                             logging.warning(f"Unexpected 'word' data format for Persian translation in line {stats['processed_lines']} for source word '{english_word[:50]}...'. Data: '{target_word_candidate}'. Skipping translation entry.")
-                             error_log.write(f"L{stats['processed_lines']}_WARN_FA_TRANS_FORMAT: Unexpected target 'word' format for Persian translation of '{english_word}'. Data: '{target_word_candidate}'.\n")
+                             # Add DE -> EN translation pairs (source=DE, target=EN)
+                             if target_words_text_list_processed: # Check if any valid German words were found
+                                 for de_word in target_words_text_list_processed:
+                                     de_id = get_word_id(word_cache, de_word, "de", args.dry_run, cursor) # Pass cursor
+                                     if de_id is not None:
+                                         translation_batch.append((de_id, en_id))
+                                         # stats['translation_pairs_batched'] += 1 # Count pairs added to batch - count moved to process_batch/flush_translation_batch
 
-                         # Add EN -> FA translation pairs
-                         if target_words_text_list_processed:
-                             for fa_word in target_words_text_list_processed:
-                                 fa_id = get_word_id(word_cache, fa_word, "fa", args.dry_run, cursor)
-                                 if fa_id is not None:
-                                     translation_batch.append((en_id, fa_id))
+                    if persian_translations:
+                         stats['english_entries_with_fa_trans'] += 1
+                         # Process Persian translations found in this English entry
+                         for trans_entry in persian_translations:
+                             target_word_candidate = trans_entry.get("word") # Use "word" for the translation text/list
+                             # Ensure target_words_text_list is a list of non-empty, stripped strings
+                             target_words_text_list_processed = []
+                             if isinstance(target_word_candidate, str):
+                                 stripped_word = target_word_candidate.strip()
+                                 if stripped_word:
+                                     target_words_text_list_processed = [stripped_word]
+                             elif isinstance(target_word_candidate, list):
+                                 for item in target_word_candidate:
+                                     if isinstance(item, str):
+                                         stripped_item = item.strip()
+                                         if stripped_item:
+                                             target_words_text_list_processed.append(stripped_item)
+                             elif target_word_candidate is not None: # Log if it was not None, but also not a processable type
+                                  logging.warning(f"Unexpected 'word' data format for Persian translation in line {stats['processed_lines']} for source word '{english_word[:50]}...'. Data: '{target_word_candidate}'. Skipping translation entry.")
+                                  error_log.write(f"L{stats['processed_lines']}_WARN_FA_TRANS_FORMAT: Unexpected target 'word' format for Persian translation of '{english_word}'. Data: '{target_word_candidate}'.\n")
+
+                             # Add EN -> FA translation pairs (source=EN, target=FA)
+                             if target_words_text_list_processed: # Check if any valid Persian words were found
+                                 for fa_word in target_words_text_list_processed:
+                                     fa_id = get_word_id(word_cache, fa_word, "fa", args.dry_run, cursor) # Pass cursor
+                                     if fa_id is not None:
+                                         translation_batch.append((en_id, fa_id))
+                                         # stats['translation_pairs_batched'] += 1 # Count pairs added to batch - count moved to process_batch/flush_translation_batch
+
+                    # Check if the English entry had both DE and FA translations listed
+                    if german_translations and persian_translations:
+                        stats['english_entries_with_both_de_fa_trans'] += 1
 
 
                     # Flush batch if size is reached
                     if len(translation_batch) >= TRANSLATION_BATCH_SIZE:
-                        process_batch(conn, translation_batch, args.dry_run, cursor, stats)
+                        process_batch(conn, translation_batch, args.dry_run, cursor, stats) # Pass stats
+                        # translation_batch is cleared inside process_batch
 
 
                 except json.JSONDecodeError:
@@ -271,21 +264,20 @@ def main():
                 except Exception as e:
                     logging.error(f"Unexpected error processing line {stats['processed_lines']}: {e}", exc_info=True)
                     stats['errors'] += 1
-                    # Log traceback only if it's not a FileNotFoundError handled elsewhere
-                    if not isinstance(e, FileNotFoundError):
-                         error_log.write(f"L{stats['processed_lines']}_ERROR_UNEXPECTED: Unexpected error: {e}\nLine: {line[:200]}\nTraceback: {sys.exc_info()[2]}\n")
+                    error_log.write(f"L{stats['processed_lines']}_ERROR_UNEXPECTED: Unexpected error: {e}\nLine: {line[:200]}\nTraceback: {sys.exc_info()[2]}\n") # Log traceback
                     continue
 
             # Process remaining batch after loop
             if translation_batch:
-                process_batch(conn, translation_batch, args.dry_run, cursor, stats)
+                process_batch(conn, translation_batch, args.dry_run, cursor, stats) # Pass stats
 
             # Create direct DE-FA links (only if not dry run)
             if not args.dry_run:
+                 # Ensure cursor is available for create_direct_links
                  if conn and cursor:
-                    create_direct_links(conn, cursor)
+                    create_direct_links(conn, cursor) # Pass cursor
                  else:
-                    logging.warning("Database connection/cursor not available for creating direct links (might be in dry run or connection failed).")
+                     logging.warning("Database connection/cursor not available for creating direct links (might be in dry run or connection failed).")
 
 
     except FileNotFoundError:
@@ -327,7 +319,9 @@ def main():
         print(f"\n--- Processing Summary ---")
         print(f"Total lines read from file: {stats['processed_lines']}")
         print(f"English entries processed: {stats['english_entries']}")
-        print(f"English entries with both German and Persian translations: {stats['valid_de_fa_pairs_in_en_entry']}")
+        print(f"English entries with German translations found: {stats['english_entries_with_de_trans']}") # Updated stat name
+        print(f"English entries with Persian translations found: {stats['english_entries_with_fa_trans']}") # Updated stat name
+        print(f"English entries with both German and Persian translations listed: {stats['english_entries_with_both_de_fa_trans']}") # Updated stat name
 
         if args.dry_run:
             print(f"Translation pairs that would have been batched (DRY RUN): {stats['translation_pairs_batched']}")
@@ -358,13 +352,14 @@ def get_word_id(cache, word, lang, is_dry_run, cursor):
 
     if is_dry_run:
         # In dry run, assign a unique temporary ID and cache it
-        # Use a non-numeric prefix to avoid confusion with real IDs
-        fake_id = f"DRYID-{len(cache)+1}"
+        # Using a simple counter based on cache size + 1
+        fake_id = len(cache) + 1
         cache[key] = fake_id
         return fake_id
 
     # Use the passed cursor for DB operations
     try:
+        # Try to select the word first
         cursor.execute(
             "SELECT id FROM words WHERE word_text = %s AND lang_code = %s",
             (word.lower(), lang) # Use parameterized query for safe escaping
@@ -403,8 +398,8 @@ def get_word_id(cache, word, lang, is_dry_run, cursor):
                      logging.warning(f"Integrity Error 1062 but word not found after re-select for '{word[:50]}...' ({lang})")
                      return None # Still couldn't find it after retry
             except Exception as re:
-                logging.error(f"Error during re-select after IntegrityError for '{word[:50]}...' ({lang}): {re}")
-                return None
+                 logging.error(f"Error during re-select after IntegrityError for '{word[:50]}...' ({lang}): {re}")
+                 return None
         else:
              # Log other IntegrityErrors
              logging.error(f"MySQL Integrity Error processing word '{word[:50]}...' ({lang}): {e.args[0]}, {e.args[1]}")
@@ -431,9 +426,10 @@ def process_batch(conn, batch, is_dry_run, cursor, stats):
         else:
             # Normal database interaction
             try:
+                # Insert into translations table. source_id and target_id are foreign keys
+                # to the words table.
                 sql = "INSERT IGNORE INTO translations (source_id, target_id) VALUES (%s, %s)"
-                # The translation_batch contains word IDs (integers or dry run strings).
-                # In dry run, we wouldn't reach this database execution part.
+                # The translation_batch contains word IDs (integers).
                 cursor.executemany(sql, batch)
                 conn.commit() # Commit the batch
                 stats['translation_pairs_batched'] += len(batch) # Increment actual count batched
@@ -450,6 +446,8 @@ def process_batch(conn, batch, is_dry_run, cursor, stats):
 def create_direct_links(conn, cursor):
     """
     Creates direct DE-FA translation links based on existing DE-EN and EN-FA links.
+    This query selects pairs of German and Persian word IDs that are both linked
+    to the same English word ID through the translations table.
     """
     print("Creating direct DE-FA links via English bridge...")
     logging.info("Creating direct DE-FA links via English bridge...")
@@ -457,13 +455,12 @@ def create_direct_links(conn, cursor):
         # Use the passed cursor for DB operations
         sql = """
             INSERT IGNORE INTO translations (source_id, target_id)
-            SELECT de.id, fa.id
+            SELECT de_en.source_id, en_fa.target_id
             FROM translations de_en
-            JOIN words de ON de_en.source_id = de.id
-            JOIN words en ON de_en.target_id = en.id
-            JOIN translations en_fa ON en_fa.source_id = en.id
-            JOIN words fa ON en_fa.target_id = fa.id
-            WHERE de.lang_code = 'de' AND en.lang_code = 'en' AND fa.lang_code = 'fa'
+            JOIN translations en_fa ON de_en.target_id = en_fa.source_id
+            JOIN words de ON de_en.source_id = de.id AND de.lang_code = 'de'
+            JOIN words en ON de_en.target_id = en.id AND en.lang_code = 'en'
+            JOIN words fa ON en_fa.target_id = fa.id AND fa.lang_code = 'fa';
         """
         cursor.execute(sql)
         conn.commit()
@@ -473,7 +470,7 @@ def create_direct_links(conn, cursor):
     except Exception as e:
         # Check if conn is available before rollback
         if conn:
-            conn.rollback()
+             conn.rollback()
         logging.error(f"Direct links creation failed: {e}")
 
 
