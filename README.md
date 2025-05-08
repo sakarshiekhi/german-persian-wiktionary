@@ -27,7 +27,7 @@ Before running the script, you need to have a MySQL database created and a user 
 
 The script expects two tables: `words` and `translations`. You can create them with SQL commands similar to these:
 
-```sql
+````````sql
 CREATE DATABASE IF NOT EXISTS dictdb CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 USE dictdb;
