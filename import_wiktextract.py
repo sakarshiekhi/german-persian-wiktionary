@@ -179,12 +179,28 @@ def main():
 
                     # Extract translations for German and Persian from the English entry
                     translations = data.get("translations", [])
-                    german_translations = [t for t in translations if t.get("code") == "de"] # Use "code" as per Wiktextract format
-                    persian_translations = [t for t in translations if t.get("code") == "fa"] # Use "code" as per Wiktextract format
-
-                    # --- FIX APPLIED HERE ---
-                    # REMOVED: if not german_translations or not persian_translations: continue
-                    # We now process DE and FA translations independently if they exist in the English entry.
+                    
+                    # DEBUG: Log the structure of a few translations for examination
+                    if stats['english_entries'] <= 5 and translations:
+                        logging.debug(f"Sample translation structure for word '{english_word}': {translations[:2]}")
+                        error_log.write(f"DEBUG_TRANS_STRUCTURE: Sample for '{english_word}':\n{json.dumps(translations[:2], indent=2, ensure_ascii=False)}\n\n")
+                    
+                    # Try multiple possible language code formats
+                    german_translations = [t for t in translations if t.get("code") in ["de", "deu", "ger","gsw"] or t.get("lang") in ["de", "deu", "ger","gsw"]] 
+                    persian_translations = [t for t in translations if t.get("code") in ["fa", "fas", "per", "pes"] or t.get("lang") in ["fa", "fas", "per", "pes"]]
+                    german_translations = [t for t in translations if t.get("code") == "de"]
+                    persian_translations = [t for t in translations if t.get("code") == "fa"]
+                    # Debug output for entries with translations (to check if we're matching any)
+                    if translations and (stats['english_entries'] <= 10 or stats['processed_lines'] % 100000 == 0):
+                        logging.debug(f"Word '{english_word}' has {len(translations)} translations, DE: {len(german_translations)}, FA: {len(persian_translations)}")
+                        # If translations exist but neither German nor Persian found, check what languages are present
+                        if translations and not german_translations and not persian_translations and stats['english_entries'] <= 20:
+                            languages = {t.get("code", t.get("lang", "unknown")) for t in translations}
+                            error_log.write(f"DEBUG_LANGS_FOUND: Word '{english_word}' has translations for languages: {languages}\n")
+                    
+                    # Dump a few English entries with translations to the error log for debugging
+                    if stats['english_entries'] <= 10 and translations:
+                        error_log.write(f"DEBUG_ENTRY: English entry '{english_word}' with translations:\n{json.dumps(data, indent=2, ensure_ascii=False)}\n\n")
 
                     if german_translations:
                          stats['english_entries_with_de_trans'] += 1
@@ -360,24 +376,65 @@ def get_word_id(cache, word, lang, is_dry_run, cursor):
     # Use the passed cursor for DB operations
     try:
         # Try to select the word first
-        cursor.execute(
-            "SELECT id FROM words WHERE word_text = %s AND lang_code = %s",
-            (word.lower(), lang) # Use parameterized query for safe escaping
-        )
-        if row := cursor.fetchone():
-            word_id = row[0]
-            cache[key] = word_id
-            return word_id
+        select_sql = "SELECT id FROM words WHERE word_text = %s AND lang_code = %s"
+        select_params = (word.lower(), lang)
+        try:
+            cursor.execute(select_sql, select_params)
+            if row := cursor.fetchone():
+                word_id = row[0]
+                cache[key] = word_id
+                return word_id
+        except Exception as e:
+            logging.error(f"Error during SELECT in get_word_id: {e}")
+            # Continue to insert anyway - maybe the table doesn't exist yet
+
+        # Check if the words table exists and create it if needed
+        try:
+            cursor.execute("SHOW TABLES LIKE 'words'")
+            words_table_exists = cursor.fetchone() is not None
+            if not words_table_exists:
+                logging.warning("'words' table does not exist. Creating it...")
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS words (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        word_text VARCHAR(255) NOT NULL,
+                        lang_code VARCHAR(10) NOT NULL,
+                        UNIQUE KEY word_lang_unique (word_text, lang_code)
+                    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+                """)
+
+            # Check if translations table exists and create it if needed    
+            cursor.execute("SHOW TABLES LIKE 'translations'")
+            translations_table_exists = cursor.fetchone() is not None
+            if not translations_table_exists:
+                logging.warning("'translations' table does not exist. Creating it...")
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS translations (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        source_id INT NOT NULL,
+                        target_id INT NOT NULL,
+                        UNIQUE KEY source_target_unique (source_id, target_id),
+                        FOREIGN KEY (source_id) REFERENCES words(id),
+                        FOREIGN KEY (target_id) REFERENCES words(id)
+                    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+                """)
+            
+        except Exception as e:
+            logging.error(f"Error checking/creating tables: {e}")
+            return None
 
         # If not found, insert the word
-        cursor.execute(
-            "INSERT INTO words (word_text, lang_code) VALUES (%s, %s)",
-            (word.lower(), lang) # Use parameterized query for safe escaping
-        )
-        # No explicit commit here, handled by process_batch or main loop flush
-        word_id = cursor.lastrowid
-        cache[key] = word_id
-        return word_id
+        try:
+            insert_sql = "INSERT INTO words (word_text, lang_code) VALUES (%s, %s)"
+            insert_params = (word.lower(), lang)
+            cursor.execute(insert_sql, insert_params)
+            # No explicit commit here, handled by process_batch or main loop flush
+            word_id = cursor.lastrowid
+            cache[key] = word_id
+            return word_id
+        except Exception as e:
+            logging.error(f"Error during INSERT in get_word_id: {e} - SQL: {insert_sql}, Params: {insert_params}")
+            return None
 
     except MySQLdb.IntegrityError as e:
         # This happens if the word was inserted by another process/thread
